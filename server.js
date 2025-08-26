@@ -19,22 +19,78 @@ const app = express();
 // Connect to database
 connectDB();
 
-// Middleware
+// Middleware - CORS configuration for production
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://short-url-frontend-ebon.vercel.app',
+  process.env.CLIENT_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log(`CORS blocked origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Health check endpoint MUST come before catch-all redirect routes
+// Database connection middleware
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/') && req.path !== '/api/health') {
+    const dbState = require('mongoose').connection.readyState;
+    if (dbState !== 1) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable',
+        error: 'Service temporarily unavailable'
+      });
+    }
+  }
+  next();
+});
+
+// Enhanced health check endpoint with database status
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'URL Shortener API is running',
-    timestamp: new Date().toISOString()
-  });
+  const mongoose = require('mongoose');
+  const dbState = mongoose.connection.readyState;
+
+  const states = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+
+  const healthStatus = {
+    status: dbState === 1 ? 'OK' : 'WARNING',
+    message: 'URL Shortener API',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    database: {
+      status: states[dbState] || 'unknown',
+      readyState: dbState,
+      host: mongoose.connection.host || 'unknown',
+      name: mongoose.connection.name || 'unknown'
+    },
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    version: process.version
+  };
+
+  const statusCode = dbState === 1 ? 200 : 503;
+  res.status(statusCode).json(healthStatus);
 });
 
 // API Routes
